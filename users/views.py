@@ -28,7 +28,6 @@ class SignupView(APIView):
                 is_verified=False,
                 otp=generate_otp()
             )
-            user.set_password(serializer.validated_data['password'])
             user.save()
 
             # Send OTP Email
@@ -57,14 +56,18 @@ class VerifyOtpView(APIView):
                 return Response({"detail": "User already verified."}, status=status.HTTP_400_BAD_REQUEST)
 
             if user.otp == serializer.validated_data['otp']:
+                # ✅ Mark user as verified
                 user.is_verified = True
                 user.otp = ""
+
+                # ✅ Set the password securely
+                user.password = serializer.validated_data['password']
                 user.save()
 
                 # 🔐 Generate JWT tokens on success
                 refresh = RefreshToken.for_user(user)
                 return Response({
-                    "detail": "User verified successfully.",
+                    "detail": "User verified and password set successfully.",
                     "refresh": str(refresh),
                     "access": str(refresh.access_token),
                     "user": {
@@ -75,9 +78,8 @@ class VerifyOtpView(APIView):
                 })
             else:
                 return Response({"detail": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    
 class LoginView(APIView):
     def post(self, request):
         serializer = UserLoginSerializer(data=request.data)

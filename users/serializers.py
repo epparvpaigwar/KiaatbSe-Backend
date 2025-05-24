@@ -1,3 +1,4 @@
+import django
 from rest_framework import serializers
 from .models import User
 
@@ -13,3 +14,4 @@ class UserLoginSerializer(serializers.Serializer):
 class VerifyOtpSerializer(serializers.Serializer):
     email = serializers.EmailField()
     otp = serializers.CharField(max_length=6)
+    password = serializers.CharField(write_only=True, min_length=6)
