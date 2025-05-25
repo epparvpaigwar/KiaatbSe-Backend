@@ -95,7 +95,7 @@ class LoginView(APIView):
             if not user.is_verified:
                 return Response({"detail": "User not verified. Please verify OTP first."}, status=status.HTTP_401_UNAUTHORIZED)
 
-            if not user.check_password(password):
+            if user.password != password:  # Compare passwords securely
                 return Response({"detail": "Invalid password."}, status=status.HTTP_401_UNAUTHORIZED)
 
             # 🔐 Generate JWT tokens
