@@ -3,6 +3,7 @@ from django.shortcuts import render
 # Create your views here.
 import random
 from django.core.mail import send_mail
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -34,7 +35,7 @@ class SignupView(APIView):
             send_mail(
                 'Your KitaabSe Signup OTP',
                 f'Your OTP code is {user.otp}',
-                None,
+                settings.DEFAULT_FROM_EMAIL,
                 [user.email],
                 fail_silently=False,
             )

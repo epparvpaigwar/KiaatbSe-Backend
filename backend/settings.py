@@ -89,28 +89,52 @@ WSGI_APPLICATION = "backend.wsgi.application"
 
 from decouple import config
 
+# DATABASES = {
+#     # 'default': {
+#     #     'ENGINE': 'django.db.backends.postgresql',
+#     #     'NAME': config('DB_NAME'),
+#     #     'USER': config('DB_USER'),
+#     #     'PASSWORD': config('DB_PASSWORD'),
+#     #     'HOST': config('DB_HOST'),
+#     #     'PORT': config('DB_PORT'),
+#     # }
+#     'default': dj_database_url.config(default=config('DATABASE_URL'))
+# }
+
 DATABASES = {
-    # 'default': {
-    #     'ENGINE': 'django.db.backends.postgresql',
-    #     'NAME': config('DB_NAME'),
-    #     'USER': config('DB_USER'),
-    #     'PASSWORD': config('DB_PASSWORD'),
-    #     'HOST': config('DB_HOST'),
-    #     'PORT': config('DB_PORT'),
-    # }
-    'default': dj_database_url.config(default=config('DATABASE_URL'))
+    'default': dj_database_url.config(
+        default=config('DATABASE_URL'),
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
 }
 
-import os
+# Add SSL configuration for PostgreSQL
+# Use 'prefer' mode which attempts SSL but falls back to non-SSL if needed
+DATABASES['default']['OPTIONS'] = {
+    'sslmode': 'prefer',
+    'connect_timeout': 10,
+}
 
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.getenv('EMAIL_HOST')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
-EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
 
+# Email Configuration
+import ssl
+
+# Use custom email backend for development to handle SSL certificate issues
+# In production, switch to 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_BACKEND = 'backend.email_backend.CustomEmailBackend'
+EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL')
+
+# SSL Configuration for email - creates an unverified SSL context for development
+# In production, you should use proper SSL certificates
+EMAIL_SSL_CERTFILE = None
+EMAIL_SSL_KEYFILE = None
+EMAIL_TIMEOUT = 30
 
 
 # Password validation
@@ -155,18 +179,6 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = True
-
-
-
-import os
-
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.getenv('EMAIL_HOST')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
-EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
 
 
 REST_FRAMEWORK = {
