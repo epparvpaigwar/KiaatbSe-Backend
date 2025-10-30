@@ -117,23 +117,15 @@ DATABASES['default']['OPTIONS'] = {
 }
 
 
-# Email Configuration
-import ssl
-
-# Use custom email backend for development to handle SSL certificate issues
-# In production, switch to 'django.core.mail.backends.smtp.EmailBackend'
+# Email Configuration - SendGrid SMTP
+# Using custom backend to handle SSL certificate issues
 EMAIL_BACKEND = 'backend.email_backend.CustomEmailBackend'
-EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
-EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
-EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
-EMAIL_HOST_USER = config('EMAIL_HOST_USER')
-EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
+EMAIL_HOST = 'smtp.sendgrid.net'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'apikey'  # This is literally the string 'apikey'
+EMAIL_HOST_PASSWORD = config('SENDGRID_API_KEY')  # Your SendGrid API Key
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL')
-
-# SSL Configuration for email - creates an unverified SSL context for development
-# In production, you should use proper SSL certificates
-EMAIL_SSL_CERTFILE = None
-EMAIL_SSL_KEYFILE = None
 EMAIL_TIMEOUT = 30
 
 
