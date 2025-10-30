@@ -8,5 +8,6 @@ def home(request):
 urlpatterns = [
     path('', home),
     path("admin/", admin.site.urls),
-    path("api/users/", include("users.urls")),  # ✅ users app URLs
+    path("api/users/", include("users.urls")),  # User authentication APIs
+    path("api/books/", include("audiobooks.urls")),  # Audiobook APIs
 ]

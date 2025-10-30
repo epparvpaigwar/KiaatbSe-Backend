@@ -71,12 +71,13 @@ class SignupView(APIView):
             )
 
         # Create new user with OTP
+        otp = generate_otp()
         user = User.objects.create(
             name=serializer.validated_data['name'],
             email=email,
-            is_verified=False,
-            otp=generate_otp()
+            is_verified=False
         )
+        user.set_otp(otp)
 
         # Send OTP Email
         try:
@@ -200,10 +201,18 @@ class VerifyOtpView(APIView):
                 http_code=400
             )
 
+        # Check OTP expiration
+        is_valid, message = user.is_otp_valid()
+        if not is_valid:
+            return APIResponse.error(
+                message=message,
+                http_code=400
+            )
+
         # Mark user as verified and set password
         user.is_verified = True
-        user.otp = ""  # Clear OTP after verification
-        user.password = password  # TODO: Hash password before saving
+        user.clear_otp()  # Clear OTP after verification
+        user.set_password(password)  # Hash password
         user.save()
 
         # Generate JWT token
@@ -287,8 +296,8 @@ class LoginView(APIView):
                 message="User not verified. Please verify OTP first."
             )
 
-        # Verify password (TODO: Use hashed password comparison)
-        if user.password != password:
+        # Verify password using hashed comparison
+        if not user.check_password(password):
             return APIResponse.unauthorized(
                 message="Invalid password. Please try again."
             )
