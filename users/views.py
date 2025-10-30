@@ -3,6 +3,7 @@ from django.shortcuts import render
 # Create your views here.
 import random
 from django.core.mail import send_mail
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -30,16 +31,40 @@ class SignupView(APIView):
             )
             user.save()
 
-            # Send OTP Email
-            send_mail(
-                'Your KitaabSe Signup OTP',
-                f'Your OTP code is {user.otp}',
-                None,
-                [user.email],
-                fail_silently=False,
-            )
+            # Send OTP Email with error handling
+            try:
+                email_message = f"""
+Hello {user.name},
 
-            return Response({"detail": "OTP sent to your email."}, status=status.HTTP_201_CREATED)
+Welcome to KitaabSe!
+
+Your verification OTP code is: {user.otp}
+
+This code will expire in 10 minutes. Please enter this code to complete your signup.
+
+If you did not request this code, please ignore this email.
+
+Best regards,
+The KitaabSe Team
+"""
+                send_mail(
+                    subject='Your KitaabSe Signup OTP',
+                    message=email_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
+                return Response({"detail": "OTP sent to your email. Please check spam folder if not received."}, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                # Log the error for debugging
+                print(f"Email sending failed: {str(e)}")
+                # Return the OTP in the response for now (only for development/debugging)
+                # In production, you should handle this differently
+                return Response({
+                    "detail": "User created but email sending failed. Please contact support.",
+                    "otp": user.otp,  # Remove this in production!
+                    "email": user.email
+                }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
