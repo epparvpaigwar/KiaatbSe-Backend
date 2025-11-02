@@ -6,8 +6,14 @@ import edge_tts
 import asyncio
 import logging
 import os
-from pydub import AudioSegment
-from pydub.utils import mediainfo
+import subprocess
+
+# pydub is not compatible with Python 3.13, using alternative method for audio info
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    PYDUB_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +181,29 @@ class TTSGenerator:
             int: Duration in seconds
         """
         try:
-            audio = AudioSegment.from_file(audio_path)
-            return int(audio.duration_seconds)
+            # Try pydub first if available
+            if PYDUB_AVAILABLE:
+                audio = AudioSegment.from_file(audio_path)
+                return int(audio.duration_seconds)
+
+            # Fallback to ffprobe (works on all Python versions)
+            result = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                 '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return int(float(result.stdout.strip()))
+
+            # If ffprobe not available, estimate from file size (rough approximation)
+            # MP3 bitrate ~128kbps = 16KB/s, so duration ~= file_size / 16000
+            file_size = os.path.getsize(audio_path)
+            estimated_duration = max(1, file_size // 16000)
+            logger.warning(f"Using estimated duration: {estimated_duration}s")
+            return estimated_duration
+
         except Exception as e:
             logger.error(f"Error getting audio duration: {str(e)}")
             return 0

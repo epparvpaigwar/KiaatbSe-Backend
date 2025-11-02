@@ -5,6 +5,7 @@ Handles PDF extraction and audio generation in the background
 import logging
 import tempfile
 import os
+import requests
 from celery import shared_task
 from django.utils import timezone
 from .models import Book, BookPage
@@ -34,18 +35,29 @@ def process_book_pdf(self, book_id):
         book.save()
 
         # Download PDF from Cloudinary to temp file
-        pdf_url = book.pdf_file.url
         temp_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+        temp_pdf_path = temp_pdf.name
 
         try:
-            # Download PDF content
-            import requests
-            response = requests.get(pdf_url)
-            temp_pdf.write(response.content)
-            temp_pdf.flush()
+            # Download PDF from Cloudinary URL
+            pdf_url = book.pdf_file.url
+
+            # Ensure URL has .pdf extension (Cloudinary raw files need this)
+            if not pdf_url.endswith('.pdf'):
+                pdf_url = pdf_url + '.pdf'
+
+            logger.info(f"Downloading PDF from: {pdf_url}")
+
+            response = requests.get(pdf_url, timeout=60)
+            response.raise_for_status()
+            pdf_content = response.content
+
+            # Write PDF content and close temp file before reading
+            temp_pdf.write(pdf_content)
+            temp_pdf.close()  # CRITICAL: Close file before reading it
 
             # Extract text from all pages
-            result = PDFProcessor.extract_pages(temp_pdf.name)
+            result = PDFProcessor.extract_pages(temp_pdf_path)
 
             if not result['success']:
                 raise Exception(result['error'])
@@ -79,9 +91,12 @@ def process_book_pdf(self, book_id):
 
         finally:
             # Clean up temp file
-            temp_pdf.close()
-            if os.path.exists(temp_pdf.name):
-                os.remove(temp_pdf.name)
+            try:
+                temp_pdf.close()
+            except:
+                pass  # Already closed
+            if os.path.exists(temp_pdf_path):
+                os.remove(temp_pdf_path)
 
     except Book.DoesNotExist:
         logger.error(f"Book {book_id} not found")
@@ -106,7 +121,7 @@ def process_book_pdf(self, book_id):
 @shared_task(bind=True, max_retries=3)
 def generate_page_audio(self, book_id, page_number):
     """
-    Generate audio for a specific page
+    Generate audio for a specific page using Hugging Face Chatterbox API
 
     Args:
         book_id: ID of the Book
@@ -192,19 +207,31 @@ def generate_page_audio(self, book_id, page_number):
         return {'success': False, 'error': str(e)}
 
     except Exception as e:
-        logger.error(f"Audio generation failed: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Audio generation failed: {error_msg}")
+
+        # Check if it's a rate limit error (429)
+        is_rate_limit = '429' in error_msg or 'rate limit' in error_msg.lower()
 
         # Update page status
         try:
             page = BookPage.objects.get(book_id=book_id, page_number=page_number)
-            page.processing_status = 'failed'
-            page.processing_error = str(e)
+            if not is_rate_limit or self.request.retries >= self.max_retries:
+                # Only mark as failed if not rate limit or max retries reached
+                page.processing_status = 'failed'
+                page.processing_error = error_msg
+            else:
+                # Keep as processing if we're going to retry
+                page.processing_status = 'pending'
             page.save()
         except:
             pass
 
-        # Retry task
-        raise self.retry(exc=e, countdown=60)
+        # Retry task with exponential backoff
+        # For rate limits: 60s, 180s, 540s
+        retry_countdown = 60 * (3 ** self.request.retries)
+        logger.warning(f"Retrying in {retry_countdown}s (attempt {self.request.retries + 1}/{self.max_retries})")
+        raise self.retry(exc=e, countdown=retry_countdown)
 
 
 def update_book_progress(book_id):
