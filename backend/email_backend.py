@@ -18,7 +18,9 @@ class CustomEmailBackend(SMTPBackend):
         if self.connection:
             return False
 
-        connection_params = {'timeout': self.timeout} if self.timeout else {}
+        # Use a shorter timeout (5 seconds) to prevent worker timeouts
+        timeout = min(self.timeout or 5, 5)
+        connection_params = {'timeout': timeout}
 
         try:
             self.connection = self.connection_class(

@@ -138,7 +138,7 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'apikey'  # This is literally the string 'apikey'
 EMAIL_HOST_PASSWORD = config('SENDGRID_API_KEY')  # Your SendGrid API Key
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL')
-EMAIL_TIMEOUT = 30
+EMAIL_TIMEOUT = 5  # Short timeout to prevent worker timeouts
 
 
 # Password validation
