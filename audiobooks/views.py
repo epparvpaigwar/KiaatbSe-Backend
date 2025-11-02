@@ -6,6 +6,9 @@ from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.decorators import api_view
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 
@@ -19,6 +22,7 @@ from .serializers import (
 from .tasks import process_book_pdf
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class BookUploadView(APIView):
     """
     API to upload a book PDF and start processing
@@ -74,22 +78,75 @@ class BookUploadView(APIView):
                 errors=serializer.errors
             )
 
-        # Create book record
-        book = serializer.save(uploader=user)
+        # Process PDF immediately before saving
+        import tempfile
+        import os
+        from .services import PDFProcessor
 
-        # Start background processing
-        process_book_pdf.delay(book.id)
+        pdf_file = request.FILES.get('pdf_file')
+        if not pdf_file:
+            return APIResponse.validation_error(message="PDF file is required")
 
-        return APIResponse.success(
-            data={
-                "id": book.id,
-                "title": book.title,
-                "processing_status": book.processing_status,
-                "message": "Book uploaded successfully. Processing started."
-            },
-            message="Book uploaded successfully. Processing will take a few minutes.",
-            http_code=201
-        )
+        # Save PDF to temp file for processing
+        temp_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+        try:
+            # Write uploaded PDF to temp file
+            for chunk in pdf_file.chunks():
+                temp_pdf.write(chunk)
+            temp_pdf.close()
+
+            # Extract text from PDF using OCR for better Hindi text extraction
+            from .services import PDFProcessorOCR
+            result = PDFProcessorOCR.extract_pages_with_ocr(
+                temp_pdf.name,
+                use_ocr=True,
+                language='hin+eng'  # Hindi + English
+            )
+
+            if not result['success']:
+                return APIResponse.error(
+                    message=f"Failed to process PDF: {result['error']}",
+                    http_code=400
+                )
+
+            # Create book record (this saves PDF to Cloudinary)
+            book = serializer.save(uploader=user)
+            book.total_pages = result['total_pages']
+            book.processing_status = 'processing'
+            book.save()
+
+            # Create BookPage records
+            for page_data in result['pages']:
+                BookPage.objects.create(
+                    book=book,
+                    page_number=page_data['page_number'],
+                    text_content=page_data['text'],
+                    processing_status='pending'
+                )
+
+            # Trigger audio generation for each page
+            from .tasks import generate_page_audio
+            for page_num in range(1, result['total_pages'] + 1):
+                generate_page_audio.delay(book.id, page_num)
+
+            return APIResponse.success(
+                data={
+                    "id": book.id,
+                    "title": book.title,
+                    "total_pages": book.total_pages,
+                    "processing_status": book.processing_status,
+                    "message": "Book uploaded and text extracted. Audio generation started."
+                },
+                message=f"Book uploaded successfully. Processing {result['total_pages']} pages...",
+                http_code=201
+            )
+
+        finally:
+            # Clean up temp file
+            try:
+                os.remove(temp_pdf.name)
+            except:
+                pass
 
 
 class BookListView(APIView):

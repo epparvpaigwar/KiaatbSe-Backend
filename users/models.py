@@ -13,6 +13,7 @@ class User(models.Model):
     name = models.CharField(max_length=150)
     email = models.EmailField(unique=True, db_index=True)
     is_verified = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)  # Required by Django REST Framework
     password = models.CharField(max_length=255)  # Stores hashed password
     otp = models.CharField(max_length=6, blank=True, null=True)
     otp_created_at = models.DateTimeField(null=True, blank=True)  # Track OTP expiration

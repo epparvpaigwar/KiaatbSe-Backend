@@ -1,0 +1,218 @@
+"""
+PDF Processing Service with OCR
+Uses Tesseract OCR for better Hindi text extraction
+"""
+import pytesseract
+from pdf2image import convert_from_path
+import pdfplumber
+import logging
+from PIL import Image
+import tempfile
+import os
+
+logger = logging.getLogger(__name__)
+
+
+class PDFProcessorOCR:
+    """
+    Service class for processing PDF files with OCR support
+    Better for Hindi text extraction with proper matras and characters
+    """
+
+    @staticmethod
+    def extract_pages_with_ocr(pdf_file_path, use_ocr=True, language='hin+eng'):
+        """
+        Extract text from all pages of a PDF file using OCR
+
+        Args:
+            pdf_file_path: Path to PDF file
+            use_ocr: Use OCR (True) or simple text extraction (False)
+            language: Tesseract language code (default: 'hin+eng' for Hindi+English)
+
+        Returns:
+            dict: {
+                'success': bool,
+                'total_pages': int,
+                'pages': [{'page_number': int, 'text': str}, ...],
+                'error': str (if any)
+            }
+        """
+        try:
+            pages_data = []
+
+            # First, get total page count
+            with pdfplumber.open(pdf_file_path) as pdf:
+                total_pages = len(pdf.pages)
+
+            logger.info(f"Processing {total_pages} pages with OCR (lang={language})")
+
+            if use_ocr:
+                # Convert PDF pages to images for OCR
+                logger.info("Converting PDF to images...")
+                images = convert_from_path(
+                    pdf_file_path,
+                    dpi=300,  # High resolution for better OCR
+                    fmt='jpeg'
+                )
+
+                logger.info(f"Processing {len(images)} images with Tesseract OCR")
+
+                # Process each image with OCR
+                for page_num, image in enumerate(images, start=1):
+                    try:
+                        # Extract text using Tesseract
+                        text = pytesseract.image_to_string(
+                            image,
+                            lang=language,
+                            config='--psm 6'  # Assume uniform block of text
+                        )
+
+                        # Clean text
+                        text = PDFProcessorOCR._clean_text(text)
+
+                        pages_data.append({
+                            'page_number': page_num,
+                            'text': text
+                        })
+
+                        logger.info(f"OCR extracted page {page_num}/{total_pages} ({len(text)} chars)")
+
+                    except Exception as e:
+                        logger.error(f"OCR error on page {page_num}: {str(e)}")
+                        pages_data.append({
+                            'page_number': page_num,
+                            'text': ""
+                        })
+
+            else:
+                # Fallback to simple text extraction (pdfplumber)
+                with pdfplumber.open(pdf_file_path) as pdf:
+                    for page_num, page in enumerate(pdf.pages, start=1):
+                        try:
+                            text = page.extract_text() or ""
+                            text = PDFProcessorOCR._clean_text(text)
+
+                            pages_data.append({
+                                'page_number': page_num,
+                                'text': text
+                            })
+
+                            logger.info(f"Extracted page {page_num}/{total_pages}")
+
+                        except Exception as e:
+                            logger.error(f"Error extracting page {page_num}: {str(e)}")
+                            pages_data.append({
+                                'page_number': page_num,
+                                'text': ""
+                            })
+
+            return {
+                'success': True,
+                'total_pages': total_pages,
+                'pages': pages_data,
+                'error': None
+            }
+
+        except Exception as e:
+            logger.error(f"PDF extraction failed: {str(e)}")
+            return {
+                'success': False,
+                'total_pages': 0,
+                'pages': [],
+                'error': str(e)
+            }
+
+    @staticmethod
+    def _clean_text(text):
+        """
+        Clean extracted text while preserving Hindi characters
+
+        Args:
+            text: Raw extracted text
+
+        Returns:
+            str: Cleaned text
+        """
+        if not text:
+            return ""
+
+        # Remove excessive whitespace but preserve paragraph breaks
+        lines = text.split('\n')
+        cleaned_lines = [line.strip() for line in lines if line.strip()]
+        text = '\n'.join(cleaned_lines)
+
+        # Replace multiple spaces with single space
+        text = ' '.join(text.split())
+
+        return text.strip()
+
+    @staticmethod
+    def extract_page_image(pdf_file_path, page_number, output_path):
+        """
+        Extract a specific page as an image
+
+        Args:
+            pdf_file_path: Path to PDF file
+            page_number: Page number to extract (1-indexed)
+            output_path: Path to save image
+
+        Returns:
+            bool: Success status
+        """
+        try:
+            images = convert_from_path(
+                pdf_file_path,
+                first_page=page_number,
+                last_page=page_number,
+                dpi=200
+            )
+
+            if images:
+                images[0].save(output_path, 'JPEG', quality=85)
+                logger.info(f"Page {page_number} saved as image: {output_path}")
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error extracting page image: {str(e)}")
+            return False
+
+    @staticmethod
+    def test_ocr(pdf_file_path, page_number=1):
+        """
+        Test OCR on a specific page
+
+        Args:
+            pdf_file_path: Path to PDF file
+            page_number: Page to test (default: 1)
+
+        Returns:
+            str: Extracted text
+        """
+        try:
+            logger.info(f"Testing OCR on page {page_number}")
+
+            # Convert single page to image
+            images = convert_from_path(
+                pdf_file_path,
+                first_page=page_number,
+                last_page=page_number,
+                dpi=300
+            )
+
+            if not images:
+                return "No images found"
+
+            # Extract text with OCR
+            text = pytesseract.image_to_string(
+                images[0],
+                lang='hin+eng',
+                config='--psm 6'
+            )
+
+            return text
+
+        except Exception as e:
+            logger.error(f"OCR test failed: {str(e)}")
+            return f"Error: {str(e)}"

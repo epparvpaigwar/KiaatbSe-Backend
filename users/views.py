@@ -78,6 +78,7 @@ class SignupView(APIView):
             is_verified=False
         )
         user.set_otp(otp)
+        user.save()  # Save OTP to database
 
         # Send OTP Email
         try:
