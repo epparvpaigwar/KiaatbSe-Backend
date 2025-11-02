@@ -19,7 +19,7 @@ from .views import (
 urlpatterns = [
     # Book Management
     path('upload/', BookUploadView.as_view(), name='book-upload'),
-    path('', BookListView.as_view(), name='book-list'),
+    path('books/', BookListView.as_view(), name='book-list'),
     path('my/', MyBooksView.as_view(), name='my-books'),
     path('<int:book_id>/', BookDetailView.as_view(), name='book-detail'),
     path('<int:book_id>/pages/', BookPagesView.as_view(), name='book-pages'),
