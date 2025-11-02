@@ -37,6 +37,9 @@ redis==5.2.1
 django-celery-beat==2.7.0
 django-celery-results==2.5.1
 
+# Email
+sendgrid==6.11.0
+
 # Utilities
 requests==2.32.3
 asgiref==3.8.1

@@ -129,16 +129,11 @@ DATABASES['default']['OPTIONS'] = {
 }
 
 
-# Email Configuration - SendGrid SMTP
-# Using custom backend to handle SSL certificate issues
-EMAIL_BACKEND = 'backend.email_backend.CustomEmailBackend'
-EMAIL_HOST = 'smtp.sendgrid.net'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'apikey'  # This is literally the string 'apikey'
-EMAIL_HOST_PASSWORD = config('SENDGRID_API_KEY')  # Your SendGrid API Key
-DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL')
-EMAIL_TIMEOUT = 5  # Short timeout to prevent worker timeouts
+# Email Configuration - SendGrid Web API (HTTP, not SMTP)
+# Using SendGrid's Python library for fast, non-blocking email delivery
+# No SMTP needed - emails sent via Celery tasks using HTTP API
+SENDGRID_API_KEY = config('SENDGRID_API_KEY')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@kitaabse.com')
 
 
 # Password validation
