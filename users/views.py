@@ -78,18 +78,67 @@ class SignupView(APIView):
         user.set_otp(otp)
         user.save()  # Save OTP to database
 
-        # Send OTP Email asynchronously using Celery
-        from .tasks import send_otp_email
-        send_otp_email.delay(user.email, user.name, user.otp)
+        # Send OTP Email using SendGrid Web API (fast HTTP call, not blocking SMTP)
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail
+            from decouple import config
 
-        return APIResponse.success(
-            data={
-                "email": user.email,
-                "message": "OTP will be sent to your email shortly"
-            },
-            message="User registered successfully. Please check your email for OTP.",
-            http_code=201
-        )
+            # Get SendGrid API key and from email
+            sendgrid_api_key = config('SENDGRID_API_KEY')
+            from_email = config('DEFAULT_FROM_EMAIL', default='noreply@kitaabse.com')
+
+            # Create email message
+            email_message = f"""
+Hello {user.name},
+
+Welcome to KitaabSe!
+
+Your verification OTP code is: {user.otp}
+
+This code will expire in 10 minutes. Please enter this code to complete your signup.
+
+If you did not request this code, please ignore this email.
+
+Best regards,
+The KitaabSe Team
+"""
+
+            # Create and send email via SendGrid Web API
+            message = Mail(
+                from_email=from_email,
+                to_emails=user.email,
+                subject='Your KitaabSe Signup OTP',
+                plain_text_content=email_message
+            )
+
+            sg = SendGridAPIClient(sendgrid_api_key)
+            response = sg.send(message)
+
+            return APIResponse.success(
+                data={
+                    "email": user.email,
+                    "message": "OTP sent successfully"
+                },
+                message="User registered successfully. Please verify OTP sent to your email.",
+                http_code=201
+            )
+
+        except Exception as e:
+            # If email fails, still return success (user is created)
+            # Return OTP in response for development
+            import logging
+            logging.error(f"SendGrid email failed: {str(e)}")
+
+            return APIResponse.success(
+                data={
+                    "email": user.email,
+                    "otp": user.otp,  # For development - remove in production
+                    "message": "User created but email failed. Use OTP above."
+                },
+                message="User registered. Email delivery failed, use OTP in response.",
+                http_code=201
+            )
 
 
 class VerifyOtpView(APIView):
