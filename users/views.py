@@ -3,8 +3,6 @@ User authentication views for KitaabSe application
 Handles user signup, OTP verification, and login
 """
 import random
-from django.core.mail import send_mail
-from django.conf import settings
 from rest_framework.views import APIView
 from .models import User
 from .serializers import UserSignupSerializer, UserLoginSerializer, VerifyOtpSerializer
@@ -80,53 +78,18 @@ class SignupView(APIView):
         user.set_otp(otp)
         user.save()  # Save OTP to database
 
-        # Send OTP Email
-        try:
-            email_message = f"""
-Hello {user.name},
+        # Send OTP Email asynchronously using Celery
+        from .tasks import send_otp_email
+        send_otp_email.delay(user.email, user.name, user.otp)
 
-Welcome to KitaabSe!
-
-Your verification OTP code is: {user.otp}
-
-This code will expire in 10 minutes. Please enter this code to complete your signup.
-
-If you did not request this code, please ignore this email.
-
-Best regards,
-The KitaabSe Team
-"""
-            send_mail(
-                subject='Your KitaabSe Signup OTP',
-                message=email_message,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
-
-            return APIResponse.success(
-                data={
-                    "email": user.email,
-                    "message": "OTP sent successfully"
-                },
-                message="User registered successfully. Please verify OTP sent to your email.",
-                http_code=201
-            )
-
-        except Exception as e:
-            # Log the error for debugging
-            print(f"Email sending failed: {str(e)}")
-
-            # Return OTP in response for development (remove in production)
-            return APIResponse.success(
-                data={
-                    "email": user.email,
-                    "otp": user.otp,  # Remove this in production!
-                    "message": "User created but email sending failed"
-                },
-                message="User registered but OTP email failed. Contact support.",
-                http_code=201
-            )
+        return APIResponse.success(
+            data={
+                "email": user.email,
+                "message": "OTP will be sent to your email shortly"
+            },
+            message="User registered successfully. Please check your email for OTP.",
+            http_code=201
+        )
 
 
 class VerifyOtpView(APIView):
