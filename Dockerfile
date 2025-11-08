@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
     poppler-utils \
     libpq-dev \
     gcc \
-    ffmpeg \             # ✅ <-- add this line
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
