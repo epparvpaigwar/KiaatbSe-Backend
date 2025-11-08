@@ -20,7 +20,7 @@ class PDFProcessorOCR:
     """
 
     @staticmethod
-    def extract_pages_with_ocr(pdf_file_path, use_ocr=True, language='hin+eng'):
+    def extract_pages_with_ocr(pdf_file_path, use_ocr=True, language='hin+eng', progress_callback=None):
         """
         Extract text from all pages of a PDF file using OCR
 
@@ -28,6 +28,8 @@ class PDFProcessorOCR:
             pdf_file_path: Path to PDF file
             use_ocr: Use OCR (True) or simple text extraction (False)
             language: Tesseract language code (default: 'hin+eng' for Hindi+English)
+            progress_callback: Optional callback function(current_page, total_pages, chars_extracted)
+                             Called after each page is processed for real-time progress updates
 
         Returns:
             dict: {
@@ -51,7 +53,7 @@ class PDFProcessorOCR:
                 logger.info("Converting PDF to images...")
                 images = convert_from_path(
                     pdf_file_path,
-                    dpi=300,  # High resolution for better OCR
+                    dpi=150,  # Reduced DPI for faster processing (was 300)
                     fmt='jpeg'
                 )
 
@@ -77,12 +79,20 @@ class PDFProcessorOCR:
 
                         logger.info(f"OCR extracted page {page_num}/{total_pages} ({len(text)} chars)")
 
+                        # Call progress callback if provided
+                        if progress_callback:
+                            progress_callback(page_num, total_pages, len(text))
+
                     except Exception as e:
                         logger.error(f"OCR error on page {page_num}: {str(e)}")
                         pages_data.append({
                             'page_number': page_num,
                             'text': ""
                         })
+
+                        # Still call progress callback even on error
+                        if progress_callback:
+                            progress_callback(page_num, total_pages, 0)
 
             else:
                 # Fallback to simple text extraction (pdfplumber)
@@ -98,6 +108,10 @@ class PDFProcessorOCR:
                             })
 
                             logger.info(f"Extracted page {page_num}/{total_pages}")
+
+                            # Call progress callback if provided
+                            if progress_callback:
+                                progress_callback(page_num, total_pages, len(text))
 
                         except Exception as e:
                             logger.error(f"Error extracting page {page_num}: {str(e)}")

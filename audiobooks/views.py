@@ -11,6 +11,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
+from django.http import StreamingHttpResponse
+import json
+import logging
 
 from users.utils import APIResponse, get_user_from_token
 from .models import Book, BookPage, ListeningProgress, UserLibrary
@@ -21,14 +24,23 @@ from .serializers import (
 )
 from .tasks import process_book_pdf
 
+logger = logging.getLogger(__name__)
+
+
+def send_sse_event(event_type, data):
+    """Helper function to format SSE events"""
+    json_data = json.dumps(data)
+    return f"event: {event_type}\ndata: {json_data}\n\n"
+
 
 @method_decorator(csrf_exempt, name='dispatch')
 class BookUploadView(APIView):
     """
-    API to upload a book PDF and start processing
+    API to upload a book PDF with real-time SSE progress updates
 
     Headers:
     Authorization: Bearer <token>
+    Accept: text/event-stream (for SSE) or application/json (for regular response)
 
     Payload (multipart/form-data):
     {
@@ -42,7 +54,16 @@ class BookUploadView(APIView):
         "is_public": true
     }
 
-    Response (201):
+    SSE Events:
+    - event: status - General status updates
+    - event: upload_progress - File upload progress
+    - event: processing_started - OCR processing started
+    - event: page_progress - Individual page OCR progress
+    - event: audio_generation_started - Audio generation started
+    - event: completed - Processing completed
+    - event: error - Error occurred
+
+    Regular Response (201):
     {
         "data": {
             "id": 1,
@@ -59,11 +80,218 @@ class BookUploadView(APIView):
     - Requires authentication
     - PDF max size: 50MB
     - Cover image max size: 5MB
-    - Processing starts automatically in background
+    - Use Accept: text/event-stream for real-time progress
     """
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
+        # Check if client wants SSE streaming
+        accept_header = request.META.get('HTTP_ACCEPT', '')
+        use_sse = 'text/event-stream' in accept_header
+
+        if use_sse:
+            return self._post_with_sse(request)
+        else:
+            return self._post_regular(request)
+
+    def _post_with_sse(self, request):
+        """Handle upload with Server-Sent Events for real-time progress"""
+
+        def event_stream():
+            try:
+                # Authenticate user
+                yield send_sse_event('status', {'message': 'Authenticating...'})
+
+                try:
+                    user = get_user_from_token(request)
+                except AuthenticationFailed as e:
+                    yield send_sse_event('error', {
+                        'error': 'Authentication failed',
+                        'details': str(e)
+                    })
+                    return
+
+                # Validate file
+                yield send_sse_event('status', {'message': 'Validating file...'})
+
+                pdf_file = request.FILES.get('pdf_file')
+                if not pdf_file:
+                    yield send_sse_event('error', {
+                        'error': 'No file provided',
+                        'details': 'Please upload a PDF file'
+                    })
+                    return
+
+                # Validate file type
+                if not pdf_file.name.endswith('.pdf'):
+                    yield send_sse_event('error', {
+                        'error': 'Invalid file type',
+                        'details': 'Only PDF files are allowed'
+                    })
+                    return
+
+                # Validate file size (50MB limit)
+                if pdf_file.size > 50 * 1024 * 1024:
+                    yield send_sse_event('error', {
+                        'error': 'File too large',
+                        'details': 'Maximum file size is 50MB'
+                    })
+                    return
+
+                yield send_sse_event('status', {'message': 'File validated successfully'})
+
+                # Save file temporarily
+                import tempfile
+                import os
+
+                yield send_sse_event('status', {'message': 'Saving file...'})
+
+                temp_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+                for chunk in pdf_file.chunks():
+                    temp_pdf.write(chunk)
+                temp_pdf.close()
+
+                yield send_sse_event('status', {
+                    'message': 'File uploaded successfully. Starting OCR processing...'
+                })
+
+                # Get metadata from request
+                title = request.POST.get('title', pdf_file.name)
+                author = request.POST.get('author', 'Unknown')
+                language = request.POST.get('language', 'hindi')
+                genre = request.POST.get('genre', 'literature')
+                description = request.POST.get('description', '')
+                is_public = request.POST.get('is_public', 'true').lower() == 'true'
+
+                # Determine OCR language
+                lang_map = {
+                    'hindi': 'hin+eng',
+                    'english': 'eng',
+                    'hinglish': 'hin+eng'
+                }
+                ocr_language = lang_map.get(language, 'hin+eng')
+
+                # Get total pages first
+                import pdfplumber
+                with pdfplumber.open(temp_pdf.name) as pdf:
+                    total_pages = len(pdf.pages)
+
+                yield send_sse_event('processing_started', {
+                    'total_pages': total_pages,
+                    'message': f'Processing {total_pages} pages with OCR'
+                })
+
+                # Progress callback for OCR
+                progress_events = []
+
+                def progress_callback(current_page, total, chars_extracted):
+                    progress_percent = int((current_page / total) * 100)
+                    event_data = {
+                        'current_page': current_page,
+                        'total_pages': total,
+                        'progress': progress_percent,
+                        'message': f'Processing page {current_page} of {total}',
+                        'extracted_chars': chars_extracted
+                    }
+                    progress_events.append(send_sse_event('page_progress', event_data))
+
+                # Process PDF with OCR
+                from .services.pdf_processor_ocr import PDFProcessorOCR
+
+                result = PDFProcessorOCR.extract_pages_with_ocr(
+                    temp_pdf.name,
+                    use_ocr=True,
+                    language=ocr_language,
+                    progress_callback=progress_callback
+                )
+
+                # Yield all progress events
+                for event in progress_events:
+                    yield event
+
+                # Clean up temp file
+                os.unlink(temp_pdf.name)
+
+                # Check if processing was successful
+                if not result['success']:
+                    yield send_sse_event('error', {
+                        'error': 'OCR processing failed',
+                        'details': result.get('error', 'Unknown error')
+                    })
+                    return
+
+                yield send_sse_event('status', {
+                    'message': 'OCR completed. Creating book record...'
+                })
+
+                # Create book object
+                book = Book.objects.create(
+                    uploader=user,
+                    title=title,
+                    author=author,
+                    language=language,
+                    genre=genre,
+                    description=description,
+                    is_public=is_public,
+                    total_pages=result['total_pages'],
+                    processing_status='processing'
+                )
+
+                # Save PDF to Cloudinary
+                book.pdf_file = pdf_file
+                book.save()
+
+                # Create BookPage records
+                yield send_sse_event('status', {
+                    'message': f'Creating {result["total_pages"]} page records...'
+                })
+
+                for page_data in result['pages']:
+                    BookPage.objects.create(
+                        book=book,
+                        page_number=page_data['page_number'],
+                        text_content=page_data['text'],
+                        processing_status='pending'
+                    )
+
+                # Trigger audio generation
+                yield send_sse_event('audio_generation_started', {
+                    'message': f'Starting audio generation for {result["total_pages"]} pages',
+                    'total_pages': result['total_pages']
+                })
+
+                from .tasks import generate_page_audio
+                for page_num in range(1, result['total_pages'] + 1):
+                    generate_page_audio.delay(book.id, page_num)
+
+                # Send completion event
+                yield send_sse_event('completed', {
+                    'book_id': book.id,
+                    'title': book.title,
+                    'author': book.author,
+                    'total_pages': book.total_pages,
+                    'message': 'Upload completed successfully! Audio generation is in progress.'
+                })
+
+            except Exception as e:
+                import traceback
+                logger.error(f"Upload error: {str(e)}\n{traceback.format_exc()}")
+                yield send_sse_event('error', {
+                    'error': 'Upload failed',
+                    'details': str(e)
+                })
+
+        # Return SSE response
+        response = StreamingHttpResponse(
+            event_stream(),
+            content_type='text/event-stream'
+        )
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response
+
+    def _post_regular(self, request):
+        """Handle upload with regular JSON response (original behavior)"""
         # Authenticate user
         try:
             user = get_user_from_token(request)
@@ -96,7 +324,7 @@ class BookUploadView(APIView):
             temp_pdf.close()
 
             # Extract text from PDF using OCR for better Hindi text extraction
-            from .services import PDFProcessorOCR
+            from .services.pdf_processor_ocr import PDFProcessorOCR
             result = PDFProcessorOCR.extract_pages_with_ocr(
                 temp_pdf.name,
                 use_ocr=True,
