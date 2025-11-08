@@ -40,7 +40,10 @@ class BookUploadView(APIView):
 
     Headers:
     Authorization: Bearer <token>
-    Accept: text/event-stream (for SSE) or application/json (for regular response)
+
+    Query Parameters:
+    - stream=true (for SSE real-time progress)
+    - stream=false or omit (for regular JSON response)
 
     Payload (multipart/form-data):
     {
@@ -54,7 +57,7 @@ class BookUploadView(APIView):
         "is_public": true
     }
 
-    SSE Events:
+    SSE Events (when stream=true):
     - event: status - General status updates
     - event: upload_progress - File upload progress
     - event: processing_started - OCR processing started
@@ -63,7 +66,7 @@ class BookUploadView(APIView):
     - event: completed - Processing completed
     - event: error - Error occurred
 
-    Regular Response (201):
+    Regular Response (when stream=false or omitted):
     {
         "data": {
             "id": 1,
@@ -76,18 +79,21 @@ class BookUploadView(APIView):
         "message": "Book uploaded successfully"
     }
 
+    Examples:
+    - SSE mode: POST /api/books/upload/?stream=true
+    - Regular mode: POST /api/books/upload/
+
     Notes:
     - Requires authentication
     - PDF max size: 50MB
     - Cover image max size: 5MB
-    - Use Accept: text/event-stream for real-time progress
+    - Use ?stream=true for real-time progress updates
     """
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        # Check if client wants SSE streaming
-        accept_header = request.META.get('HTTP_ACCEPT', '')
-        use_sse = 'text/event-stream' in accept_header
+        # Check if client wants SSE streaming via query parameter
+        use_sse = request.query_params.get('stream', '').lower() == 'true'
 
         if use_sse:
             return self._post_with_sse(request)

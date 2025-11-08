@@ -16,7 +16,7 @@ Instead of waiting for the entire process to complete, the frontend receives con
 
 ### Upload Book with SSE Progress
 
-**Endpoint:** `POST /api/books/upload-sse/`
+**Endpoint:** `POST /api/books/upload/?stream=true`
 
 **Method:** `POST`
 
@@ -26,6 +26,10 @@ Instead of waiting for the entire process to complete, the frontend receives con
 
 **Authentication:** Bearer Token Required
 
+**Query Parameters:**
+- `stream=true` - Enable SSE real-time progress (optional)
+- If omitted or `stream=false` - Returns regular JSON response
+
 ---
 
 ## Request Format
@@ -34,7 +38,11 @@ Instead of waiting for the entire process to complete, the frontend receives con
 ```http
 Authorization: Bearer <your_jwt_token>
 Content-Type: multipart/form-data
-Accept: text/event-stream
+```
+
+### Query Parameters
+```
+stream=true
 ```
 
 ### Body (Form Data)
@@ -122,22 +130,17 @@ data: {
 ```javascript
 async function uploadBookWithProgress(file, metadata) {
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append('pdf_file', file);
   formData.append('title', metadata.title);
   formData.append('author', metadata.author);
   formData.append('language', metadata.language);
-  formData.append('category', metadata.category);
+  formData.append('genre', metadata.genre);
 
   // Get auth token
   const token = localStorage.getItem('access_token');
 
-  // Create EventSource connection
-  const eventSource = new EventSource(
-    `/api/books/upload-sse/?token=${token}`
-  );
-
-  // Upload file first (using fetch)
-  const response = await fetch('/api/books/upload-sse/', {
+  // Upload file with streaming (using fetch with ReadableStream)
+  const response = await fetch('/api/books/upload/?stream=true', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -145,49 +148,62 @@ async function uploadBookWithProgress(file, metadata) {
     body: formData,
   });
 
-  // Listen to SSE events
-  eventSource.addEventListener('status', (event) => {
-    const data = JSON.parse(event.data);
-    console.log('Status:', data.message);
-    updateUI(data.message);
-  });
+  // Read SSE stream
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
 
-  eventSource.addEventListener('upload_progress', (event) => {
-    const data = JSON.parse(event.data);
-    console.log('Upload progress:', data.progress + '%');
-    updateProgressBar(data.progress);
-  });
+  // Function to read and process SSE stream
+  function processStream() {
+    reader.read().then(({ done, value }) => {
+      if (done) {
+        console.log('Stream complete');
+        return;
+      }
 
-  eventSource.addEventListener('processing_started', (event) => {
-    const data = JSON.parse(event.data);
-    console.log('Processing started:', data.total_pages, 'pages');
-    showProcessingUI(data.total_pages);
-  });
+      // Decode the chunk
+      const chunk = decoder.decode(value);
+      const events = chunk.split('\n\n').filter(e => e.trim());
 
-  eventSource.addEventListener('page_progress', (event) => {
-    const data = JSON.parse(event.data);
-    console.log(`Page ${data.current_page}/${data.total_pages} processed`);
-    updatePageProgress(data.current_page, data.total_pages);
-  });
+      events.forEach(eventText => {
+        const lines = eventText.split('\n');
+        let eventType = '';
+        let data = null;
 
-  eventSource.addEventListener('completed', (event) => {
-    const data = JSON.parse(event.data);
-    console.log('Completed!', data);
-    showSuccess(data);
-    eventSource.close(); // Close connection
-  });
+        lines.forEach(line => {
+          if (line.startsWith('event:')) {
+            eventType = line.substring(7).trim();
+          } else if (line.startsWith('data:')) {
+            data = JSON.parse(line.substring(6));
+          }
+        });
 
-  eventSource.addEventListener('error', (event) => {
-    const data = JSON.parse(event.data);
-    console.error('Error:', data.error);
-    showError(data.error);
-    eventSource.close(); // Close connection
-  });
+        // Handle events
+        if (eventType === 'status') {
+          console.log('Status:', data.message);
+          updateUI(data.message);
+        } else if (eventType === 'processing_started') {
+          console.log('Processing started:', data.total_pages, 'pages');
+          showProcessingUI(data.total_pages);
+        } else if (eventType === 'page_progress') {
+          console.log(`Page ${data.current_page}/${data.total_pages}`);
+          updatePageProgress(data.current_page, data.total_pages);
+        } else if (eventType === 'completed') {
+          console.log('Completed!', data);
+          showSuccess(data);
+          return;
+        } else if (eventType === 'error') {
+          console.error('Error:', data.error);
+          showError(data.error);
+          return;
+        }
+      });
 
-  eventSource.onerror = (error) => {
-    console.error('SSE connection error:', error);
-    eventSource.close();
-  };
+      // Continue reading
+      processStream();
+    });
+  }
+
+  processStream();
 }
 
 // Helper functions
@@ -220,7 +236,7 @@ function showError(error) {
 ### React Implementation
 
 ```jsx
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 function BookUploadWithSSE() {
   const [status, setStatus] = useState('');
@@ -230,59 +246,68 @@ function BookUploadWithSSE() {
 
   const uploadBook = async (file, metadata) => {
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('pdf_file', file);
     formData.append('title', metadata.title);
     formData.append('author', metadata.author);
     formData.append('language', metadata.language);
 
     const token = localStorage.getItem('access_token');
 
-    // Start SSE connection
-    const eventSource = new EventSource(
-      `http://localhost:8000/api/books/upload-sse/?token=${token}`
-    );
-
-    eventSource.addEventListener('status', (event) => {
-      const data = JSON.parse(event.data);
-      setStatus(data.message);
-    });
-
-    eventSource.addEventListener('processing_started', (event) => {
-      const data = JSON.parse(event.data);
-      setTotalPages(data.total_pages);
-      setStatus(data.message);
-    });
-
-    eventSource.addEventListener('page_progress', (event) => {
-      const data = JSON.parse(event.data);
-      setCurrentPage(data.current_page);
-      setTotalPages(data.total_pages);
-      setProgress(data.progress);
-      setStatus(data.message);
-    });
-
-    eventSource.addEventListener('completed', (event) => {
-      const data = JSON.parse(event.data);
-      setStatus('Upload completed!');
-      setProgress(100);
-      eventSource.close();
-      // Redirect or update UI
-    });
-
-    eventSource.addEventListener('error', (event) => {
-      const data = JSON.parse(event.data);
-      setStatus('Error: ' + data.error);
-      eventSource.close();
-    });
-
-    // Upload file
-    const response = await fetch('http://localhost:8000/api/books/upload-sse/', {
+    // Upload with streaming
+    const response = await fetch('http://localhost:8000/api/books/upload/?stream=true', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
       },
       body: formData,
     });
+
+    // Read stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    const processStream = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const events = chunk.split('\n\n').filter(e => e.trim());
+
+        events.forEach(eventText => {
+          const lines = eventText.split('\n');
+          let eventType = '';
+          let data = null;
+
+          lines.forEach(line => {
+            if (line.startsWith('event:')) {
+              eventType = line.substring(7).trim();
+            } else if (line.startsWith('data:')) {
+              data = JSON.parse(line.substring(6));
+            }
+          });
+
+          if (eventType === 'status') {
+            setStatus(data.message);
+          } else if (eventType === 'processing_started') {
+            setTotalPages(data.total_pages);
+            setStatus(data.message);
+          } else if (eventType === 'page_progress') {
+            setCurrentPage(data.current_page);
+            setTotalPages(data.total_pages);
+            setProgress(data.progress);
+            setStatus(data.message);
+          } else if (eventType === 'completed') {
+            setStatus('Upload completed!');
+            setProgress(100);
+          } else if (eventType === 'error') {
+            setStatus('Error: ' + data.error);
+          }
+        });
+      }
+    };
+
+    processStream();
   };
 
   return (
@@ -499,30 +524,23 @@ function cancelUpload() {
 
 ## Testing
 
-### Using cURL (Basic Test)
+### Using cURL (SSE Test)
 ```bash
-curl -N -H "Accept: text/event-stream" \
+curl -N \
   -H "Authorization: Bearer YOUR_TOKEN" \
-  -F "file=@test.pdf" \
+  -F "pdf_file=@test.pdf" \
   -F "title=Test Book" \
   -F "author=Test Author" \
-  http://localhost:8000/api/books/upload-sse/
+  "http://localhost:8000/api/books/upload/?stream=true"
 ```
 
-### Browser Testing
-Open browser console and paste:
-```javascript
-const eventSource = new EventSource(
-  'http://localhost:8000/api/books/upload-sse/?token=YOUR_TOKEN'
-);
-
-eventSource.onmessage = (event) => {
-  console.log('Event:', event);
-};
-
-eventSource.onerror = (error) => {
-  console.error('Error:', error);
-};
+### Using cURL (Regular JSON Test)
+```bash
+curl -X POST \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "pdf_file=@test.pdf" \
+  -F "title=Test Book" \
+  "http://localhost:8000/api/books/upload/"
 ```
 
 ---
