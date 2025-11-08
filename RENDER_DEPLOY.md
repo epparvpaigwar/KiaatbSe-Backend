@@ -4,20 +4,31 @@
 
 Your OCR is failing because Render doesn't have tesseract and poppler installed by default.
 
-### Quick Fix (2 minutes)
+### Solution: Use Aptfile (Render's official method)
 
-1. Go to your **Render Dashboard**
-2. Select your web service
-3. Go to **Settings** tab
-4. Find **Build Command** section
-5. Replace the current command with:
+Render uses an `Aptfile` to install system packages. An `Aptfile` has been created in your repo.
 
-```bash
-apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-hin tesseract-ocr-eng poppler-utils && pip install -r requirements.txt
-```
+**Steps:**
 
-6. Click **Save Changes**
-7. Click **Manual Deploy** → **Deploy latest commit**
+1. **Commit and push the Aptfile:**
+   ```bash
+   git add Aptfile
+   git commit -m "Add system dependencies for OCR"
+   git push origin main
+   ```
+
+2. **Ensure Build Command is simple:**
+   - Go to Render Dashboard → Your Service → Settings
+   - Build Command should be: `pip install -r requirements.txt`
+   - If you changed it earlier, change it back
+
+3. **Deploy:**
+   - Render will auto-deploy on push, OR
+   - Click **Manual Deploy** → **Deploy latest commit**
+
+4. **Verify in build logs:**
+   - Look for: "Installing dependencies from Aptfile"
+   - Should see tesseract and poppler being installed
 
 ### What this does:
 
@@ -41,17 +52,9 @@ Your OCR errors will be gone! The system will be able to:
 - If you remove these system packages, OCR will break again
 - This is not a one-time fix - it needs to run on every build
 
-### Alternative: Use Build Script
+### Why Aptfile?
 
-If you prefer a cleaner approach, you can use the `render_build.sh` script:
-
-1. Make sure `render_build.sh` is committed to your git repo
-2. In Render Build Command, use:
-   ```bash
-   ./render_build.sh
-   ```
-
-This is the same thing, just organized in a script file.
+Render's build environment has a read-only filesystem, so you can't run `apt-get` directly. The `Aptfile` is Render's official way to install system packages - it works like `requirements.txt` but for Ubuntu packages.
 
 ---
 
@@ -59,9 +62,13 @@ This is the same thing, just organized in a script file.
 
 Here's what your Render settings should look like:
 
+**Files in your repo:**
+- `Aptfile` (contains system packages - already created)
+- `requirements.txt` (contains Python packages)
+
 **Build Command:**
 ```bash
-apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-hin tesseract-ocr-eng poppler-utils && pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
 **Start Command:**
