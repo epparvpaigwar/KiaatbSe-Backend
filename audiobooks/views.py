@@ -103,71 +103,98 @@ class BookUploadView(APIView):
     def _post_with_sse(self, request):
         """Handle upload with Server-Sent Events for real-time progress"""
 
+        # PRE-PROCESS: Read file and metadata BEFORE starting SSE stream
+        # This prevents "Connection reset by peer" errors
+        import tempfile
+        import os
+
+        try:
+            # Authenticate user first
+            user = get_user_from_token(request)
+        except AuthenticationFailed as e:
+            # Return error as SSE
+            def error_stream():
+                yield send_sse_event('error', {
+                    'error': 'Authentication failed',
+                    'details': str(e)
+                })
+            response = StreamingHttpResponse(error_stream(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache'
+            response['X-Accel-Buffering'] = 'no'
+            return response
+
+        # Validate and read file
+        pdf_file = request.FILES.get('pdf_file')
+        if not pdf_file:
+            def error_stream():
+                yield send_sse_event('error', {
+                    'error': 'No file provided',
+                    'details': 'Please upload a PDF file'
+                })
+            response = StreamingHttpResponse(error_stream(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache'
+            response['X-Accel-Buffering'] = 'no'
+            return response
+
+        # Validate file type
+        if not pdf_file.name.endswith('.pdf'):
+            def error_stream():
+                yield send_sse_event('error', {
+                    'error': 'Invalid file type',
+                    'details': 'Only PDF files are allowed'
+                })
+            response = StreamingHttpResponse(error_stream(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache'
+            response['X-Accel-Buffering'] = 'no'
+            return response
+
+        # Validate file size (50MB limit)
+        if pdf_file.size > 50 * 1024 * 1024:
+            def error_stream():
+                yield send_sse_event('error', {
+                    'error': 'File too large',
+                    'details': 'Maximum file size is 50MB'
+                })
+            response = StreamingHttpResponse(error_stream(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache'
+            response['X-Accel-Buffering'] = 'no'
+            return response
+
+        # Get metadata from request
+        title = request.POST.get('title', pdf_file.name)
+        author = request.POST.get('author', 'Unknown')
+        language = request.POST.get('language', 'hindi')
+        genre = request.POST.get('genre', 'literature')
+        description = request.POST.get('description', '')
+        is_public = request.POST.get('is_public', 'true').lower() == 'true'
+
+        # Save file to temp location BEFORE streaming
+        try:
+            temp_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+            for chunk in pdf_file.chunks():
+                temp_pdf.write(chunk)
+            temp_pdf.close()
+            temp_pdf_path = temp_pdf.name
+            print(f"[UPLOAD DEBUG] File saved to temp: {temp_pdf_path}")
+        except Exception as e:
+            def error_stream():
+                yield send_sse_event('error', {
+                    'error': 'File upload failed',
+                    'details': str(e)
+                })
+            response = StreamingHttpResponse(error_stream(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache'
+            response['X-Accel-Buffering'] = 'no'
+            return response
+
+        # NOW start the SSE stream with processing
         def event_stream():
             try:
-                # Authenticate user
-                yield send_sse_event('status', {'message': 'Authenticating...'})
-
-                try:
-                    user = get_user_from_token(request)
-                except AuthenticationFailed as e:
-                    yield send_sse_event('error', {
-                        'error': 'Authentication failed',
-                        'details': str(e)
-                    })
-                    return
-
-                # Validate file
-                yield send_sse_event('status', {'message': 'Validating file...'})
-
-                pdf_file = request.FILES.get('pdf_file')
-                if not pdf_file:
-                    yield send_sse_event('error', {
-                        'error': 'No file provided',
-                        'details': 'Please upload a PDF file'
-                    })
-                    return
-
-                # Validate file type
-                if not pdf_file.name.endswith('.pdf'):
-                    yield send_sse_event('error', {
-                        'error': 'Invalid file type',
-                        'details': 'Only PDF files are allowed'
-                    })
-                    return
-
-                # Validate file size (50MB limit)
-                if pdf_file.size > 50 * 1024 * 1024:
-                    yield send_sse_event('error', {
-                        'error': 'File too large',
-                        'details': 'Maximum file size is 50MB'
-                    })
-                    return
-
+                yield send_sse_event('status', {'message': 'Authentication successful'})
                 yield send_sse_event('status', {'message': 'File validated successfully'})
-
-                # Save file temporarily
-                import tempfile
-                import os
-
-                yield send_sse_event('status', {'message': 'Saving file...'})
-
-                temp_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
-                for chunk in pdf_file.chunks():
-                    temp_pdf.write(chunk)
-                temp_pdf.close()
-
                 yield send_sse_event('status', {
                     'message': 'File uploaded successfully. Starting OCR processing...'
                 })
-
-                # Get metadata from request
-                title = request.POST.get('title', pdf_file.name)
-                author = request.POST.get('author', 'Unknown')
-                language = request.POST.get('language', 'hindi')
-                genre = request.POST.get('genre', 'literature')
-                description = request.POST.get('description', '')
-                is_public = request.POST.get('is_public', 'true').lower() == 'true'
 
                 # Determine OCR language
                 lang_map = {
@@ -179,7 +206,7 @@ class BookUploadView(APIView):
 
                 # Get total pages first
                 import pdfplumber
-                with pdfplumber.open(temp_pdf.name) as pdf:
+                with pdfplumber.open(temp_pdf_path) as pdf:
                     total_pages = len(pdf.pages)
 
                 yield send_sse_event('processing_started', {
@@ -190,7 +217,7 @@ class BookUploadView(APIView):
                 print(f"\n{'='*60}")
                 print(f"[UPLOAD DEBUG] Starting OCR processing for {total_pages} pages")
                 print(f"[UPLOAD DEBUG] OCR Language: {ocr_language}")
-                print(f"[UPLOAD DEBUG] Temp file: {temp_pdf.name}")
+                print(f"[UPLOAD DEBUG] Temp file: {temp_pdf_path}")
                 print(f"{'='*60}\n")
 
                 # Progress callback for OCR
@@ -215,7 +242,7 @@ class BookUploadView(APIView):
                 print(f"[UPLOAD DEBUG] About to call PDFProcessorOCR.extract_pages_with_ocr...")
 
                 result = PDFProcessorOCR.extract_pages_with_ocr(
-                    temp_pdf.name,
+                    temp_pdf_path,
                     use_ocr=True,
                     language=ocr_language,
                     progress_callback=progress_callback
@@ -234,7 +261,7 @@ class BookUploadView(APIView):
 
                 # Clean up temp file
                 print(f"[UPLOAD DEBUG] Cleaning up temp file...")
-                os.unlink(temp_pdf.name)
+                os.unlink(temp_pdf_path)
                 print(f"[UPLOAD DEBUG] Temp file deleted")
 
                 # Check if processing was successful
@@ -318,6 +345,15 @@ class BookUploadView(APIView):
                 print(f"[UPLOAD ERROR] Traceback:\n{error_trace}")
                 print(f"{'='*60}\n")
                 logger.error(f"Upload error: {str(e)}\n{error_trace}")
+
+                # Clean up temp file on error
+                try:
+                    if os.path.exists(temp_pdf_path):
+                        os.unlink(temp_pdf_path)
+                        print(f"[UPLOAD ERROR] Cleaned up temp file")
+                except:
+                    pass
+
                 yield send_sse_event('error', {
                     'error': 'Upload failed',
                     'details': str(e)
