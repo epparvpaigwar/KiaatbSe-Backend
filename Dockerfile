@@ -37,5 +37,5 @@ CMD gunicorn backend.wsgi:application \
     --worker-class sync \
     --max-requests 1000 \
     --max-requests-jitter 100 \
-    --graceful-timeout 60 \
+    --graceful-timeout 60 I \
     --keep-alive 5

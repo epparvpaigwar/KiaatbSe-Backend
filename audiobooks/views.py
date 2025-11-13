@@ -187,10 +187,17 @@ class BookUploadView(APIView):
                     'message': f'Processing {total_pages} pages with OCR'
                 })
 
+                print(f"\n{'='*60}")
+                print(f"[UPLOAD DEBUG] Starting OCR processing for {total_pages} pages")
+                print(f"[UPLOAD DEBUG] OCR Language: {ocr_language}")
+                print(f"[UPLOAD DEBUG] Temp file: {temp_pdf.name}")
+                print(f"{'='*60}\n")
+
                 # Progress callback for OCR
                 progress_events = []
 
                 def progress_callback(current_page, total, chars_extracted):
+                    print(f"[PROGRESS CALLBACK] Page {current_page}/{total} - Chars: {chars_extracted}")
                     progress_percent = int((current_page / total) * 100)
                     event_data = {
                         'current_page': current_page,
@@ -200,9 +207,12 @@ class BookUploadView(APIView):
                         'extracted_chars': chars_extracted
                     }
                     progress_events.append(send_sse_event('page_progress', event_data))
+                    print(f"[PROGRESS CALLBACK] Event added to queue. Total events: {len(progress_events)}")
 
                 # Process PDF with OCR
                 from .services.pdf_processor_ocr import PDFProcessorOCR
+
+                print(f"[UPLOAD DEBUG] About to call PDFProcessorOCR.extract_pages_with_ocr...")
 
                 result = PDFProcessorOCR.extract_pages_with_ocr(
                     temp_pdf.name,
@@ -211,21 +221,32 @@ class BookUploadView(APIView):
                     progress_callback=progress_callback
                 )
 
+                print(f"[UPLOAD DEBUG] OCR processing completed!")
+                print(f"[UPLOAD DEBUG] Result success: {result.get('success', False)}")
+                print(f"[UPLOAD DEBUG] Total progress events collected: {len(progress_events)}")
+                print(f"[UPLOAD DEBUG] Pages extracted: {len(result.get('pages', []))}")
+
                 # Yield all progress events
-                for event in progress_events:
+                print(f"[UPLOAD DEBUG] Now yielding {len(progress_events)} progress events...")
+                for i, event in enumerate(progress_events):
+                    print(f"[UPLOAD DEBUG] Yielding event {i+1}/{len(progress_events)}")
                     yield event
 
                 # Clean up temp file
+                print(f"[UPLOAD DEBUG] Cleaning up temp file...")
                 os.unlink(temp_pdf.name)
+                print(f"[UPLOAD DEBUG] Temp file deleted")
 
                 # Check if processing was successful
                 if not result['success']:
+                    print(f"[UPLOAD DEBUG] OCR FAILED! Error: {result.get('error', 'Unknown error')}")
                     yield send_sse_event('error', {
                         'error': 'OCR processing failed',
                         'details': result.get('error', 'Unknown error')
                     })
                     return
 
+                print(f"[UPLOAD DEBUG] OCR successful! Creating book record...")
                 yield send_sse_event('status', {
                     'message': 'OCR completed. Creating book record...'
                 })
@@ -242,16 +263,20 @@ class BookUploadView(APIView):
                     total_pages=result['total_pages'],
                     processing_status='processing'
                 )
+                print(f"[UPLOAD DEBUG] Book created with ID: {book.id}")
 
                 # Save PDF to Cloudinary
+                print(f"[UPLOAD DEBUG] Saving PDF to Cloudinary...")
                 book.pdf_file = pdf_file
                 book.save()
+                print(f"[UPLOAD DEBUG] PDF saved to Cloudinary")
 
                 # Create BookPage records
                 yield send_sse_event('status', {
                     'message': f'Creating {result["total_pages"]} page records...'
                 })
 
+                print(f"[UPLOAD DEBUG] Creating {len(result['pages'])} BookPage records...")
                 for page_data in result['pages']:
                     BookPage.objects.create(
                         book=book,
@@ -259,6 +284,7 @@ class BookUploadView(APIView):
                         text_content=page_data['text'],
                         processing_status='pending'
                     )
+                print(f"[UPLOAD DEBUG] All BookPage records created")
 
                 # Trigger audio generation
                 yield send_sse_event('audio_generation_started', {
@@ -266,11 +292,14 @@ class BookUploadView(APIView):
                     'total_pages': result['total_pages']
                 })
 
+                print(f"[UPLOAD DEBUG] Triggering audio generation for {result['total_pages']} pages...")
                 from .tasks import generate_page_audio
                 for page_num in range(1, result['total_pages'] + 1):
                     generate_page_audio.delay(book.id, page_num)
+                    print(f"[UPLOAD DEBUG] Queued audio generation for page {page_num}")
 
                 # Send completion event
+                print(f"[UPLOAD DEBUG] Sending completion event...")
                 yield send_sse_event('completed', {
                     'book_id': book.id,
                     'title': book.title,
@@ -278,10 +307,17 @@ class BookUploadView(APIView):
                     'total_pages': book.total_pages,
                     'message': 'Upload completed successfully! Audio generation is in progress.'
                 })
+                print(f"[UPLOAD DEBUG] Upload process completed successfully!")
 
             except Exception as e:
                 import traceback
-                logger.error(f"Upload error: {str(e)}\n{traceback.format_exc()}")
+                error_trace = traceback.format_exc()
+                print(f"\n{'='*60}")
+                print(f"[UPLOAD ERROR] An exception occurred!")
+                print(f"[UPLOAD ERROR] Error: {str(e)}")
+                print(f"[UPLOAD ERROR] Traceback:\n{error_trace}")
+                print(f"{'='*60}\n")
+                logger.error(f"Upload error: {str(e)}\n{error_trace}")
                 yield send_sse_event('error', {
                     'error': 'Upload failed',
                     'details': str(e)

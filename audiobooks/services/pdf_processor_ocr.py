@@ -40,16 +40,24 @@ class PDFProcessorOCR:
             }
         """
         try:
+            print(f"\n[OCR SERVICE] Starting PDF processing...")
+            print(f"[OCR SERVICE] PDF path: {pdf_file_path}")
+            print(f"[OCR SERVICE] Use OCR: {use_ocr}")
+            print(f"[OCR SERVICE] Language: {language}")
+
             pages_data = []
 
             # First, get total page count
+            print(f"[OCR SERVICE] Opening PDF to get page count...")
             with pdfplumber.open(pdf_file_path) as pdf:
                 total_pages = len(pdf.pages)
 
+            print(f"[OCR SERVICE] Total pages: {total_pages}")
             logger.info(f"Processing {total_pages} pages with OCR (lang={language})")
 
             if use_ocr:
                 # Convert PDF pages to images for OCR
+                print(f"[OCR SERVICE] Converting PDF to images...")
                 logger.info("Converting PDF to images...")
                 images = convert_from_path(
                     pdf_file_path,
@@ -57,17 +65,22 @@ class PDFProcessorOCR:
                     fmt='jpeg'
                 )
 
+                print(f"[OCR SERVICE] Conversion complete. Got {len(images)} images")
                 logger.info(f"Processing {len(images)} images with Tesseract OCR")
 
                 # Process each image with OCR
+                print(f"[OCR SERVICE] Starting OCR processing loop...")
                 for page_num, image in enumerate(images, start=1):
+                    print(f"[OCR SERVICE] Processing page {page_num}/{total_pages}...")
                     try:
                         # Extract text using Tesseract
+                        print(f"[OCR SERVICE] Running Tesseract on page {page_num}...")
                         text = pytesseract.image_to_string(
                             image,
                             lang=language,
                             config='--psm 6'  # Assume uniform block of text
                         )
+                        print(f"[OCR SERVICE] Tesseract completed for page {page_num}. Extracted {len(text)} chars")
 
                         # Clean text
                         text = PDFProcessorOCR._clean_text(text)
@@ -81,9 +94,14 @@ class PDFProcessorOCR:
 
                         # Call progress callback if provided
                         if progress_callback:
+                            print(f"[OCR SERVICE] Calling progress callback for page {page_num}...")
                             progress_callback(page_num, total_pages, len(text))
+                            print(f"[OCR SERVICE] Progress callback completed for page {page_num}")
 
                     except Exception as e:
+                        import traceback
+                        print(f"[OCR SERVICE ERROR] Error on page {page_num}: {str(e)}")
+                        print(f"[OCR SERVICE ERROR] Traceback: {traceback.format_exc()}")
                         logger.error(f"OCR error on page {page_num}: {str(e)}")
                         pages_data.append({
                             'page_number': page_num,
@@ -120,6 +138,11 @@ class PDFProcessorOCR:
                                 'text': ""
                             })
 
+            print(f"[OCR SERVICE] ✅ Processing complete!")
+            print(f"[OCR SERVICE] Total pages processed: {total_pages}")
+            print(f"[OCR SERVICE] Pages data count: {len(pages_data)}")
+            print(f"[OCR SERVICE] Returning result...\n")
+
             return {
                 'success': True,
                 'total_pages': total_pages,
@@ -128,6 +151,11 @@ class PDFProcessorOCR:
             }
 
         except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            print(f"\n[OCR SERVICE ERROR] ❌ PDF extraction failed!")
+            print(f"[OCR SERVICE ERROR] Error: {str(e)}")
+            print(f"[OCR SERVICE ERROR] Traceback:\n{error_trace}\n")
             logger.error(f"PDF extraction failed: {str(e)}")
             return {
                 'success': False,
