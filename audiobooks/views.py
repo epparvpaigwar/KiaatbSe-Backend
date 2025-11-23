@@ -60,8 +60,8 @@ class BookUploadView(APIView):
     SSE Events (when stream=true):
     - event: status - General status updates
     - event: upload_progress - File upload progress
-    - event: processing_started - OCR processing started
-    - event: page_progress - Individual page OCR progress
+    - event: processing_started - Text extraction processing started
+    - event: page_progress - Individual page extraction progress
     - event: audio_generation_started - Audio generation started
     - event: completed - Processing completed
     - event: error - Error occurred
@@ -193,7 +193,7 @@ class BookUploadView(APIView):
                 yield send_sse_event('status', {'message': 'Authentication successful'})
                 yield send_sse_event('status', {'message': 'File validated successfully'})
                 yield send_sse_event('status', {
-                    'message': 'File uploaded successfully. Starting OCR processing...'
+                    'message': 'File uploaded successfully. Starting text extraction with Gemini...'
                 })
 
                 # Determine OCR language
@@ -211,7 +211,7 @@ class BookUploadView(APIView):
 
                 yield send_sse_event('processing_started', {
                     'total_pages': total_pages,
-                    'message': f'Processing {total_pages} pages with OCR'
+                    'message': f'Processing {total_pages} pages with Gemini Vision API'
                 })
 
                 print(f"\n{'='*60}")
@@ -220,7 +220,7 @@ class BookUploadView(APIView):
                 print(f"[UPLOAD DEBUG] Temp file: {temp_pdf_path}")
                 print(f"{'='*60}\n")
 
-                # Progress callback for OCR
+                # Progress callback for Gemini extraction
                 progress_events = []
 
                 def progress_callback(current_page, total, chars_extracted):
@@ -236,19 +236,21 @@ class BookUploadView(APIView):
                     progress_events.append(send_sse_event('page_progress', event_data))
                     print(f"[PROGRESS CALLBACK] Event added to queue. Total events: {len(progress_events)}")
 
-                # Process PDF with OCR
-                from .services.pdf_processor_ocr import PDFProcessorOCR
+                # Process PDF with Gemini Vision API
+                from .services.pdf_processor_gemini import PDFProcessorGemini
 
-                print(f"[UPLOAD DEBUG] About to call PDFProcessorOCR.extract_pages_with_ocr...")
+                print(f"[UPLOAD DEBUG] About to call PDFProcessorGemini.extract_pages_with_gemini...")
 
-                result = PDFProcessorOCR.extract_pages_with_ocr(
+                # Map language to Gemini format
+                gemini_language = 'hindi' if 'hin' in ocr_language else 'english'
+
+                result = PDFProcessorGemini.extract_pages_with_gemini(
                     temp_pdf_path,
-                    use_ocr=True,
-                    language=ocr_language,
+                    language=gemini_language,
                     progress_callback=progress_callback
                 )
 
-                print(f"[UPLOAD DEBUG] OCR processing completed!")
+                print(f"[UPLOAD DEBUG] Gemini processing completed!")
                 print(f"[UPLOAD DEBUG] Result success: {result.get('success', False)}")
                 print(f"[UPLOAD DEBUG] Total progress events collected: {len(progress_events)}")
                 print(f"[UPLOAD DEBUG] Pages extracted: {len(result.get('pages', []))}")
@@ -266,16 +268,16 @@ class BookUploadView(APIView):
 
                 # Check if processing was successful
                 if not result['success']:
-                    print(f"[UPLOAD DEBUG] OCR FAILED! Error: {result.get('error', 'Unknown error')}")
+                    print(f"[UPLOAD DEBUG] GEMINI EXTRACTION FAILED! Error: {result.get('error', 'Unknown error')}")
                     yield send_sse_event('error', {
-                        'error': 'OCR processing failed',
+                        'error': 'Text extraction failed',
                         'details': result.get('error', 'Unknown error')
                     })
                     return
 
-                print(f"[UPLOAD DEBUG] OCR successful! Creating book record...")
+                print(f"[UPLOAD DEBUG] Gemini extraction successful! Creating book record...")
                 yield send_sse_event('status', {
-                    'message': 'OCR completed. Creating book record...'
+                    'message': 'Text extraction completed. Creating book record...'
                 })
 
                 # Create book object
@@ -401,12 +403,11 @@ class BookUploadView(APIView):
                 temp_pdf.write(chunk)
             temp_pdf.close()
 
-            # Extract text from PDF using OCR for better Hindi text extraction
-            from .services.pdf_processor_ocr import PDFProcessorOCR
-            result = PDFProcessorOCR.extract_pages_with_ocr(
+            # Extract text from PDF using Gemini Vision API for better Hindi text extraction
+            from .services.pdf_processor_gemini import PDFProcessorGemini
+            result = PDFProcessorGemini.extract_pages_with_gemini(
                 temp_pdf.name,
-                use_ocr=True,
-                language='hin+eng'  # Hindi + English
+                language='hindi'  # Hindi language
             )
 
             if not result['success']:
