@@ -50,9 +50,9 @@ class PDFProcessorGemini:
 
             genai.configure(api_key=api_key)
 
-            # Use Gemini 1.5 Flash - more stable for free tier
-            # Has better rate limits and availability
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # Use Gemini 2.5 Flash - stable and fast for free tier
+            # Best balance of speed and quality
+            model = genai.GenerativeModel('models/gemini-2.5-flash')
 
             print(f"\n[GEMINI SERVICE] Starting PDF processing...")
             print(f"[GEMINI SERVICE] PDF path: {pdf_file_path}")
@@ -367,7 +367,7 @@ Return only the extracted text without any additional commentary, formatting mar
                 return "Error: GEMINI_API_KEY not found"
 
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('models/gemini-2.5-flash')
 
             # Convert single page to image
             images = convert_from_path(
