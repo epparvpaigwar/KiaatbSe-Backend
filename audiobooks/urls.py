@@ -8,6 +8,7 @@ from .views import (
     MyBooksView,
     BookDetailView,
     BookPagesView,
+    BookProcessingStatusView,
     UpdateProgressView,
     MyLibraryView,
     LibraryAddView,
@@ -23,6 +24,7 @@ urlpatterns = [
     path('my/', MyBooksView.as_view(), name='my-books'),
     path('<int:book_id>/', BookDetailView.as_view(), name='book-detail'),
     path('<int:book_id>/pages/', BookPagesView.as_view(), name='book-pages'),
+    path('<int:book_id>/status/', BookProcessingStatusView.as_view(), name='book-status'),
 
     # Progress Tracking
     path('<int:book_id>/progress/', UpdateProgressView.as_view(), name='book-progress'),

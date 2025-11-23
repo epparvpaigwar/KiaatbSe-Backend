@@ -131,6 +131,7 @@ def generate_page_audio(self, book_id, page_number):
         dict: Generation result
     """
     try:
+        print(f"\n[🎵 AUDIO TASK] Starting audio generation for Book {book_id}, Page {page_number}")
         logger.info(f"Generating audio for book {book_id}, page {page_number}")
 
         # Get book and page
@@ -139,20 +140,26 @@ def generate_page_audio(self, book_id, page_number):
 
         # Skip if already processed
         if page.processing_status == 'completed':
+            print(f"[✓ AUDIO TASK] Page {page_number} already completed, skipping")
             logger.info(f"Page {page_number} already processed, skipping")
             return {'success': True, 'message': 'Already processed'}
 
         # Update status
+        print(f"[⏳ AUDIO TASK] Page {page_number} - Status: PENDING → PROCESSING")
         page.processing_status = 'processing'
         page.save()
 
         # Check if page has text
         if not page.text_content or page.text_content.strip() == "":
+            print(f"[⚠️  AUDIO TASK] Page {page_number} - No text content, marking as completed")
             logger.warning(f"Page {page_number} has no text content")
             page.processing_status = 'completed'
             page.processing_error = 'No text content'
             page.save()
             return {'success': True, 'message': 'No text content'}
+
+        print(f"[📝 AUDIO TASK] Page {page_number} - Text length: {len(page.text_content)} chars")
+        print(f"[🔊 AUDIO TASK] Page {page_number} - Generating audio with Edge TTS...")
 
         # Generate audio using Edge TTS
         temp_audio = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
@@ -168,6 +175,9 @@ def generate_page_audio(self, book_id, page_number):
             if not result['success']:
                 raise Exception(result['error'])
 
+            print(f"[✓ AUDIO TASK] Page {page_number} - Audio generated! Duration: {result['duration']}s")
+            print(f"[☁️  AUDIO TASK] Page {page_number} - Uploading to Cloudinary...")
+
             # Upload audio to Cloudinary
             upload_result = cloudinary.uploader.upload(
                 temp_audio.name,
@@ -177,12 +187,16 @@ def generate_page_audio(self, book_id, page_number):
                 overwrite=True
             )
 
+            print(f"[✓ AUDIO TASK] Page {page_number} - Uploaded to Cloudinary")
+
             # Update page with audio info
             page.audio_file = upload_result['secure_url']
             page.audio_duration = result['duration']
             page.processing_status = 'completed'
             page.processed_at = timezone.now()
             page.save()
+
+            print(f"[✅ AUDIO TASK] Page {page_number} - COMPLETED! Audio URL: {upload_result['secure_url']}")
 
             # Update book processing progress
             update_book_progress(book_id)
@@ -252,6 +266,8 @@ def update_book_progress(book_id):
             progress = int((completed_pages / total_pages) * 100)
             book.processing_progress = progress
 
+            print(f"[📊 PROGRESS] Book {book_id} - {completed_pages}/{total_pages} pages completed ({progress}%)")
+
             # If all pages completed, mark book as completed
             if completed_pages == total_pages:
                 book.processing_status = 'completed'
@@ -262,6 +278,8 @@ def update_book_progress(book_id):
                     page.audio_duration for page in book.pages.all()
                 )
                 book.total_duration = total_duration
+
+                print(f"[🎉 COMPLETE] Book {book_id} - ALL AUDIO GENERATED! Total duration: {total_duration}s")
 
             book.save()
             logger.info(f"Book {book_id} progress updated: {progress}%")
