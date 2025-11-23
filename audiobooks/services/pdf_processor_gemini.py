@@ -9,8 +9,10 @@ import pdfplumber
 import logging
 import os
 import base64
+import time
 from io import BytesIO
 from PIL import Image
+from google.api_core import exceptions as google_exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +50,9 @@ class PDFProcessorGemini:
 
             genai.configure(api_key=api_key)
 
-            # Use Gemini 2.5 Flash for fastest performance (15 RPM free tier)
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            # Use Gemini 1.5 Flash - more stable for free tier
+            # Has better rate limits and availability
+            model = genai.GenerativeModel('gemini-1.5-flash')
 
             print(f"\n[GEMINI SERVICE] Starting PDF processing...")
             print(f"[GEMINI SERVICE] PDF path: {pdf_file_path}")
@@ -87,19 +90,28 @@ class PDFProcessorGemini:
             print(f"[GEMINI SERVICE] Starting Gemini processing loop...")
             for page_num, image in enumerate(images, start=1):
                 print(f"[GEMINI SERVICE] Processing page {page_num}/{total_pages}...")
+
+                # Add delay between requests to avoid rate limiting
+                # Free tier: 15 RPM = 1 request per 4 seconds to be safe
+                if page_num > 1:
+                    delay = 5  # 5 seconds between pages = ~12 pages/minute (safe)
+                    print(f"[GEMINI SERVICE] Waiting {delay}s to avoid rate limits...")
+                    time.sleep(delay)
+
                 try:
                     # Optimize image size to reduce tokens and improve speed
                     optimized_image = PDFProcessorGemini._optimize_image(image)
 
                     print(f"[GEMINI SERVICE] Calling Gemini API for page {page_num}...")
 
-                    # Extract text using Gemini Vision
-                    response = model.generate_content([
+                    # Extract text using Gemini Vision with retry logic
+                    text = PDFProcessorGemini._extract_with_retry(
+                        model,
                         extraction_prompt,
-                        optimized_image
-                    ])
+                        optimized_image,
+                        page_num
+                    )
 
-                    text = response.text if response else ""
                     print(f"[GEMINI SERVICE] Gemini completed for page {page_num}. Extracted {len(text)} chars")
 
                     # Clean text
@@ -124,20 +136,31 @@ class PDFProcessorGemini:
                     print(f"[GEMINI SERVICE ERROR] Traceback: {traceback.format_exc()}")
                     logger.error(f"Gemini error on page {page_num}: {str(e)}")
 
-                    # Fallback: try with simpler prompt
-                    try:
-                        print(f"[GEMINI SERVICE] Retrying with fallback prompt...")
-                        response = model.generate_content([
-                            "Extract all text from this image exactly as it appears.",
-                            optimized_image
-                        ])
-                        text = PDFProcessorGemini._clean_text(response.text if response else "")
-                        pages_data.append({
-                            'page_number': page_num,
-                            'text': text
-                        })
-                        logger.info(f"Gemini retry successful for page {page_num}")
-                    except:
+                    # For quota errors, wait longer before failing
+                    if "429" in str(e) or "quota" in str(e).lower():
+                        print(f"[GEMINI SERVICE] Quota exceeded - waiting 60s before retry...")
+                        time.sleep(60)
+
+                        try:
+                            text = PDFProcessorGemini._extract_with_retry(
+                                model,
+                                "Extract all text from this image.",
+                                optimized_image,
+                                page_num,
+                                max_retries=1
+                            )
+                            pages_data.append({
+                                'page_number': page_num,
+                                'text': text
+                            })
+                            logger.info(f"Gemini quota retry successful for page {page_num}")
+                        except:
+                            pages_data.append({
+                                'page_number': page_num,
+                                'text': ""
+                            })
+                    else:
+                        # Other errors - just save empty text
                         pages_data.append({
                             'page_number': page_num,
                             'text': ""
@@ -172,6 +195,55 @@ class PDFProcessorGemini:
                 'pages': [],
                 'error': str(e)
             }
+
+    @staticmethod
+    def _extract_with_retry(model, prompt, image, page_num, max_retries=3):
+        """
+        Extract text with automatic retry on rate limit errors
+
+        Args:
+            model: Gemini model instance
+            prompt: Extraction prompt
+            image: PIL Image
+            page_num: Current page number
+            max_retries: Maximum retry attempts
+
+        Returns:
+            str: Extracted text
+        """
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content([prompt, image])
+                return response.text if response else ""
+
+            except google_exceptions.ResourceExhausted as e:
+                # Rate limit or quota exceeded
+                if attempt < max_retries - 1:
+                    # Extract retry delay from error message if available
+                    retry_delay = 15  # Default 15 seconds
+                    error_str = str(e)
+                    if "retry in" in error_str.lower():
+                        try:
+                            # Try to extract the delay from error message
+                            import re
+                            match = re.search(r'retry in ([\d.]+)s', error_str)
+                            if match:
+                                retry_delay = float(match.group(1)) + 2  # Add 2s buffer
+                        except:
+                            pass
+
+                    print(f"[GEMINI RETRY] Rate limit hit on page {page_num}, waiting {retry_delay}s (attempt {attempt + 1}/{max_retries})...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"[GEMINI RETRY] Max retries reached for page {page_num}")
+                    raise
+
+            except Exception as e:
+                # Other errors - fail immediately
+                print(f"[GEMINI ERROR] Non-retryable error on page {page_num}: {str(e)}")
+                raise
+
+        return ""
 
     @staticmethod
     def _get_extraction_prompt(language):
@@ -295,7 +367,7 @@ Return only the extracted text without any additional commentary, formatting mar
                 return "Error: GEMINI_API_KEY not found"
 
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            model = genai.GenerativeModel('gemini-1.5-flash')
 
             # Convert single page to image
             images = convert_from_path(
