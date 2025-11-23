@@ -164,6 +164,9 @@ class BookUploadView(APIView):
         description = request.POST.get('description', '')
         is_public = request.POST.get('is_public', 'true').lower() == 'true'
 
+        # Get cover image if provided
+        cover_image = request.FILES.get('cover_image')
+
         # Save file to temp location BEFORE streaming
         try:
             temp_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
@@ -189,7 +192,7 @@ class BookUploadView(APIView):
                 yield send_sse_event('status', {'message': 'Authentication successful'})
                 yield send_sse_event('status', {'message': 'File validated successfully'})
                 yield send_sse_event('status', {
-                    'message': 'File uploaded successfully. Starting text extraction with Gemini...'
+                    'message': 'File uploaded successfully. Starting text extraction...'
                 })
 
                 # Determine OCR language
@@ -207,7 +210,7 @@ class BookUploadView(APIView):
 
                 yield send_sse_event('processing_started', {
                     'total_pages': total_pages,
-                    'message': f'Processing {total_pages} pages with Gemini Vision API'
+                    'message': f'Processing {total_pages} pages...'
                 })
 
                 print(f"\n{'='*60}")
@@ -293,8 +296,14 @@ class BookUploadView(APIView):
                 # Save PDF to Cloudinary
                 print(f"[UPLOAD DEBUG] Saving PDF to Cloudinary...")
                 book.pdf_file = pdf_file
+
+                # Save cover image if provided
+                if cover_image:
+                    print(f"[UPLOAD DEBUG] Saving cover image to Cloudinary...")
+                    book.cover_image = cover_image
+
                 book.save()
-                print(f"[UPLOAD DEBUG] PDF saved to Cloudinary")
+                print(f"[UPLOAD DEBUG] PDF and cover image saved to Cloudinary")
 
                 # Create BookPage records
                 yield send_sse_event('status', {
