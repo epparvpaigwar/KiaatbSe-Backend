@@ -26,33 +26,33 @@ class APIResponse:
         }, status=http_code)
 
     @staticmethod
-    def error(message, data=None, http_code=400):
+    def error(message, http_code=400):
         """
         Standard error response
+        Consistent format: message in 'message' field, empty 'data' field
 
         Args:
             message: Error message
-            data: Error data (default: None)
             http_code: HTTP status code (default: 400)
         """
         return Response({
-            'data': data if data is not None else "",
+            'data': "",
             'status': 'FAIL',
             'http_code': http_code,
             'message': message
         }, status=http_code)
 
     @staticmethod
-    def too_many_requests(message="Too many requests", data=None):
+    def too_many_requests(message="Too many requests"):
         """
         Standard rate limit exceeded response
+        Consistent format: message in 'message' field, empty 'data' field
 
         Args:
             message: Error message (default: "Too many requests")
-            data: Additional data (default: None)
         """
         return Response({
-            'data': data if data is not None else "",
+            'data': "",
             'status': 'FAIL',
             'http_code': 429,
             'message': message
@@ -62,29 +62,45 @@ class APIResponse:
     def validation_error(message="Validation failed", errors=None):
         """
         Standard validation error response
+        Flattens error dict into a simple message string for easy UI display
 
         Args:
             message: Error message (default: "Validation failed")
-            errors: Validation errors (default: None)
+            errors: Validation errors dict (default: None)
         """
+        # If errors dict provided, extract first error message for UI display
+        error_message = message
+        if errors:
+            # Flatten errors into a simple string
+            # Example: {"email": ["This field is required"]} -> "Email: This field is required"
+            for field, messages in errors.items():
+                if isinstance(messages, list) and len(messages) > 0:
+                    field_name = field.replace('_', ' ').capitalize()
+                    error_message = f"{field_name}: {messages[0]}"
+                    break  # Use first error only
+                elif isinstance(messages, str):
+                    field_name = field.replace('_', ' ').capitalize()
+                    error_message = f"{field_name}: {messages}"
+                    break
+
         return Response({
-            'data': errors if errors is not None else "",
+            'data': "",
             'status': 'FAIL',
             'http_code': 400,
-            'message': message
+            'message': error_message
         }, status=status.HTTP_400_BAD_REQUEST)
 
     @staticmethod
-    def not_found(message="Resource not found", data=None):
+    def not_found(message="Resource not found"):
         """
         Standard not found response
+        Consistent format: message in 'message' field, empty 'data' field
 
         Args:
             message: Error message (default: "Resource not found")
-            data: Additional data (default: None)
         """
         return Response({
-            'data': data if data is not None else "",
+            'data': "",
             'status': 'FAIL',
             'http_code': 404,
             'message': message
@@ -106,16 +122,16 @@ class APIResponse:
         }, status=status.HTTP_401_UNAUTHORIZED)
 
     @staticmethod
-    def access_denied(message="Access denied", data=None):
+    def access_denied(message="Access denied"):
         """
         Standard access denied response with 423 status code
+        Consistent format: message in 'message' field, empty 'data' field
 
         Args:
             message: Error message (default: "Access denied")
-            data: Additional data (default: None)
         """
         return Response({
-            'data': data if data is not None else "",
+            'data': "",
             'status': 'FAIL',
             'http_code': 423,
             'message': message
