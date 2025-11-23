@@ -8,11 +8,9 @@ ENV PYTHONUNBUFFERED=1
 # Set work directory
 WORKDIR /app
 
-# Install system dependencies (including tesseract, poppler, and ffmpeg)
+# Install system dependencies (poppler for PDF processing, ffmpeg for audio)
+# Removed tesseract-ocr - now using Gemini Vision API for faster text extraction
 RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-hin \
-    tesseract-ocr-eng \
     poppler-utils \
     libpq-dev \
     gcc \
@@ -29,7 +27,7 @@ COPY . /app/
 # Expose port (Render will override this with $PORT)
 EXPOSE 10000
 
-# Run gunicorn with extended timeout for large file OCR processing
+# Run gunicorn with extended timeout for PDF processing and Gemini API calls
 CMD gunicorn backend.wsgi:application \
     --bind 0.0.0.0:$PORT \
     --timeout 1800 \
