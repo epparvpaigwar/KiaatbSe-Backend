@@ -92,13 +92,9 @@ class BookUploadView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        # Check if client wants SSE streaming via query parameter
-        use_sse = request.query_params.get('stream', '').lower() == 'true'
-
-        if use_sse:
-            return self._post_with_sse(request)
-        else:
-            return self._post_regular(request)
+        # Always use SSE streaming for real-time progress updates
+        # Non-SSE mode removed as SSE provides better user experience
+        return self._post_with_sse(request)
 
     def _post_with_sse(self, request):
         """Handle upload with Server-Sent Events for real-time progress"""
@@ -315,17 +311,27 @@ class BookUploadView(APIView):
                     )
                 print(f"[UPLOAD DEBUG] All BookPage records created")
 
-                # Trigger audio generation
+                # Trigger audio generation (ASYNC - happens in background)
                 yield send_sse_event('audio_generation_started', {
-                    'message': f'Starting audio generation for {result["total_pages"]} pages',
-                    'total_pages': result['total_pages']
+                    'message': f'Queuing audio generation for {result["total_pages"]} pages',
+                    'total_pages': result['total_pages'],
+                    'book_id': book.id
                 })
 
-                print(f"[UPLOAD DEBUG] Triggering audio generation for {result['total_pages']} pages...")
+                print(f"\n{'='*60}")
+                print(f"[AUDIO GENERATION] Queuing background tasks for {result['total_pages']} pages...")
+                print(f"[AUDIO GENERATION] Book ID: {book.id}")
+                print(f"{'='*60}")
+
                 from .tasks import generate_page_audio
                 for page_num in range(1, result['total_pages'] + 1):
-                    generate_page_audio.delay(book.id, page_num)
-                    print(f"[UPLOAD DEBUG] Queued audio generation for page {page_num}")
+                    task = generate_page_audio.delay(book.id, page_num)
+                    print(f"[AUDIO TASK] Page {page_num}/{result['total_pages']} - Task ID: {task.id} - Status: QUEUED ✓")
+
+                print(f"[AUDIO GENERATION] All {result['total_pages']} tasks queued successfully!")
+                print(f"[AUDIO GENERATION] Audio will generate in BACKGROUND (asynchronous)")
+                print(f"[AUDIO GENERATION] Check status at: /api/books/{book.id}/status/")
+                print(f"{'='*60}\n")
 
                 # Send completion event
                 print(f"[UPLOAD DEBUG] Sending completion event...")
@@ -334,9 +340,11 @@ class BookUploadView(APIView):
                     'title': book.title,
                     'author': book.author,
                     'total_pages': book.total_pages,
-                    'message': 'Upload completed successfully! Audio generation is in progress.'
+                    'status_url': f'/api/books/{book.id}/status/',
+                    'message': 'Upload completed! Audio generation is running in background. Check status endpoint for progress.'
                 })
                 print(f"[UPLOAD DEBUG] Upload process completed successfully!")
+                print(f"[UPLOAD DEBUG] Monitor audio progress: GET /api/books/{book.id}/status/")
 
             except Exception as e:
                 import traceback
@@ -369,91 +377,6 @@ class BookUploadView(APIView):
         response['Cache-Control'] = 'no-cache'
         response['X-Accel-Buffering'] = 'no'
         return response
-
-    def _post_regular(self, request):
-        """Handle upload with regular JSON response (original behavior)"""
-        # Authenticate user
-        try:
-            user = get_user_from_token(request)
-        except AuthenticationFailed as e:
-            return APIResponse.unauthorized(message=str(e))
-
-        # Validate request data
-        serializer = BookUploadSerializer(data=request.data)
-        if not serializer.is_valid():
-            return APIResponse.validation_error(
-                message="Invalid input data",
-                errors=serializer.errors
-            )
-
-        # Process PDF immediately before saving
-        import tempfile
-        import os
-        from .services import PDFProcessor
-
-        pdf_file = request.FILES.get('pdf_file')
-        if not pdf_file:
-            return APIResponse.validation_error(message="PDF file is required")
-
-        # Save PDF to temp file for processing
-        temp_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
-        try:
-            # Write uploaded PDF to temp file
-            for chunk in pdf_file.chunks():
-                temp_pdf.write(chunk)
-            temp_pdf.close()
-
-            # Extract text from PDF using Gemini Vision API for better Hindi text extraction
-            from .services.pdf_processor_gemini import PDFProcessorGemini
-            result = PDFProcessorGemini.extract_pages_with_gemini(
-                temp_pdf.name,
-                language='hindi'  # Hindi language
-            )
-
-            if not result['success']:
-                return APIResponse.error(
-                    message=f"Failed to process PDF: {result['error']}",
-                    http_code=400
-                )
-
-            # Create book record (this saves PDF to Cloudinary)
-            book = serializer.save(uploader=user)
-            book.total_pages = result['total_pages']
-            book.processing_status = 'processing'
-            book.save()
-
-            # Create BookPage records
-            for page_data in result['pages']:
-                BookPage.objects.create(
-                    book=book,
-                    page_number=page_data['page_number'],
-                    text_content=page_data['text'],
-                    processing_status='pending'
-                )
-
-            # Trigger audio generation for each page
-            from .tasks import generate_page_audio
-            for page_num in range(1, result['total_pages'] + 1):
-                generate_page_audio.delay(book.id, page_num)
-
-            return APIResponse.success(
-                data={
-                    "id": book.id,
-                    "title": book.title,
-                    "total_pages": book.total_pages,
-                    "processing_status": book.processing_status,
-                    "message": "Book uploaded and text extracted. Audio generation started."
-                },
-                message=f"Book uploaded successfully. Processing {result['total_pages']} pages...",
-                http_code=201
-            )
-
-        finally:
-            # Clean up temp file
-            try:
-                os.remove(temp_pdf.name)
-            except:
-                pass
 
 
 class BookListView(APIView):
@@ -788,6 +711,87 @@ class BookPagesView(APIView):
                 "pages": serializer.data
             },
             message="Book pages retrieved successfully"
+        )
+
+
+class BookProcessingStatusView(APIView):
+    """
+    API to check book processing and audio generation status
+
+    GET /api/books/<id>/status/
+
+    Response:
+    {
+        "data": {
+            "book_id": 1,
+            "title": "Book Title",
+            "processing_status": "processing",  // uploaded, processing, completed, failed
+            "processing_progress": 75,  // 0-100%
+            "total_pages": 100,
+            "pages_status": {
+                "pending": 10,
+                "processing": 15,
+                "completed": 75,
+                "failed": 0
+            },
+            "audio_ready": false,
+            "pages_with_audio": 75,
+            "estimated_time_remaining": "5 minutes"
+        },
+        "status": "PASS",
+        "http_code": 200
+    }
+    """
+
+    def get(self, request, book_id):
+        # Get book
+        book = get_object_or_404(Book, id=book_id, is_active=True)
+
+        # Count page statuses
+        pages = BookPage.objects.filter(book=book)
+        total_pages = pages.count()
+
+        pending = pages.filter(processing_status='pending').count()
+        processing = pages.filter(processing_status='processing').count()
+        completed = pages.filter(processing_status='completed').count()
+        failed = pages.filter(processing_status='failed').count()
+
+        # Calculate progress
+        progress = int((completed / total_pages) * 100) if total_pages > 0 else 0
+
+        # Estimate time remaining (assuming 30 seconds per page)
+        pages_remaining = pending + processing
+        estimated_seconds = pages_remaining * 30
+        if estimated_seconds < 60:
+            estimated_time = f"{estimated_seconds} seconds"
+        elif estimated_seconds < 3600:
+            estimated_time = f"{int(estimated_seconds / 60)} minutes"
+        else:
+            estimated_time = f"{int(estimated_seconds / 3600)} hours"
+
+        # Determine overall status
+        audio_ready = (completed == total_pages and total_pages > 0)
+
+        return APIResponse.success(
+            data={
+                "book_id": book.id,
+                "title": book.title,
+                "processing_status": book.processing_status,
+                "processing_progress": progress,
+                "total_pages": total_pages,
+                "pages_status": {
+                    "pending": pending,
+                    "processing": processing,
+                    "completed": completed,
+                    "failed": failed
+                },
+                "audio_ready": audio_ready,
+                "pages_with_audio": completed,
+                "estimated_time_remaining": estimated_time if pages_remaining > 0 else "Complete!",
+                "created_at": book.uploaded_at,
+                "last_updated": book.modified_at
+            },
+            message="Book processing status retrieved successfully"
         )
 
 
