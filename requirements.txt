@@ -34,12 +34,6 @@ pydub==0.25.1
 # File Storage (Cloudinary)
 cloudinary==1.41.0
 
-# Background Jobs (Celery + Redis)
-celery==5.4.0
-redis==5.2.1
-django-celery-beat==2.7.0
-django-celery-results==2.5.1
-
 # Email
 sendgrid==6.11.0
 
